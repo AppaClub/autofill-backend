@@ -1,97 +1,150 @@
-// content.js
+(function () {
+    const fields = [];
+    const processedPages = new Set(); // Track pages already processed
+    const filledFields = new Set();   // Track fields that have been filled
+    let currentBatchIndex = 0;        // Track the current batch of fields being sent
 
-(async function() {
-    // Function to extract form fields from the page.
-    function getFormFields() {
-      const fields = [];
-      const inputs = document.querySelectorAll('input, select, textarea');
-      inputs.forEach(input => {
-        const field = {};
-        let labelElement = null;
-  
-        // Try to find the label using the 'for' attribute.
-        if (input.id) {
-          labelElement = document.querySelector(`label[for="${input.id}"]`);
+    function detectFormFields(pageContainer) {
+        const pageNumber = pageContainer.dataset.pageNumber;
+        console.log(`Scanning page ${pageNumber} for form fields...`);
+
+        if (processedPages.has(pageNumber)) {
+            console.log(`Page ${pageNumber} has already been processed. Skipping...`);
+            return;
         }
-  
-        // If not found, check parent elements.
-        if (!labelElement) {
-          let parent = input.parentElement;
-          while (parent && parent !== document.body) {
-            if (parent.tagName.toLowerCase() === 'label') {
-              labelElement = parent;
-              break;
+
+        const annotationLayer = pageContainer.querySelector('.annotationLayer');
+        if (!annotationLayer) {
+            console.warn(`Annotation layer not found for page ${pageNumber}. Waiting for it...`);
+            waitForAnnotationLayer(pageContainer);
+            return;
+        }
+
+        console.log(`Annotation layer found for page ${pageNumber}.`);
+
+        setTimeout(() => {
+            const inputs = annotationLayer.querySelectorAll('input, select, textarea');
+            console.log(`Found ${inputs.length} input elements on page ${pageNumber}.`);
+
+            inputs.forEach(input => {
+                const field = {
+                    id: input.id || input.name || '',
+                    label: input.name || input.placeholder || '',
+                    type: input.type || '',
+                    // context: getFieldContext(input)
+                };
+
+                if (field.id && field.label && !filledFields.has(field.id)) {
+                    fields.push(field);
+                }
+            });
+
+            console.log(`Detected ${inputs.length} form fields on page ${pageNumber}.`);
+
+            if (inputs.length > 0) {
+                processedPages.add(pageNumber); // Mark this page as processed
+                console.log(`Preparing to send detected fields from page ${pageNumber} to the backend in batches.`);
+                sendFieldsInBatches(); // Start sending fields in batches
             }
-            parent = parent.parentElement;
-          }
-        }
-  
-        if (labelElement) {
-          field.label = labelElement.innerText.trim().replace(':', '');
-        } else {
-          field.label = input.placeholder || input.name || '';
-        }
-  
-        field.id = input.id || input.name || '';
-        field.type = input.type || '';
-  
-        if (field.label && field.id) {
-          fields.push(field);
-        }
-      });
-      return fields;
+        }, 100);  // Small delay to ensure inputs are rendered
     }
-  
-    // Function to fill in the form fields.
-    function fillFormFields(autofillData) {
-      Object.keys(autofillData).forEach(fieldId => {
-        const inputs = document.querySelectorAll(`#${fieldId}, [name="${fieldId}"]`);
-        inputs.forEach(input => {
-          if (input.type === 'radio' || input.type === 'checkbox') {
-            if (input.value === autofillData[fieldId]) {
-              input.checked = true;
-            }
-          } else {
-            input.value = autofillData[fieldId];
-          }
+    function getFieldContext(input) {
+        const label = input.closest('label')?input.closest('label').innerText : '';
+        const surroundingText = input.closest('form') ? input.closest('form').innerText : '';
+        return { label, surroundingText };
+    }
+    function waitForAnnotationLayer(pageContainer) {
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach(node => {
+                    if (node.classList && node.classList.contains('annotationLayer')) {
+                        console.log(`Annotation layer found for page ${pageContainer.dataset.pageNumber}.`);
+                        observer.disconnect(); // Stop observing once found
+                        detectFormFields(pageContainer); // Detect fields once annotation is ready
+                    }
+                });
+            });
         });
-      });
+
+        observer.observe(pageContainer, { childList: true, subtree: true });
     }
-  
-    // Check if the page has any forms.
-    if (!document.forms.length) {
-      console.log('No forms detected on this page.');
-      return;
+
+    function sendFieldsInBatches() {
+        if (currentBatchIndex >= fields.length) {
+            console.log('All fields have been sent and filled.');
+            return; // All fields are processed
+        }
+
+        const batch = fields.slice(currentBatchIndex, currentBatchIndex + 4); // Get next 4 fields
+        console.log(`Sending batch ${currentBatchIndex / 4 + 1}:`, batch);
+
+        fetch('http://localhost:5055/api/get_autofill_data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ form_fields: batch })
+        })
+            .then(response => {
+                if (!response.ok) {
+                    console.error('Error fetching autofill data:', response.statusText);
+                    return;
+                }
+                return response.json();
+            })
+            .then(autofillData => {
+                if (autofillData) {
+                    fillFormFields(autofillData);
+                    console.log(`Batch ${currentBatchIndex / 4 + 1} autofill completed.`);
+                    currentBatchIndex += 4; // Move to the next batch
+                    sendFieldsInBatches(); // Send the next batch after filling this one
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
     }
-  
-    // Extract form fields.
-    const formFields = getFormFields();
-  
-    if (formFields.length === 0) {
-      console.log('No form fields detected.');
-      return;
+
+    function fillFormFields(autofillData) {
+        Object.keys(autofillData).forEach(fieldId => {
+            const inputs = document.querySelectorAll(`#${fieldId}, [name="${fieldId}"]`);
+            inputs.forEach(input => {
+                if (!filledFields.has(fieldId)) { // Fill only if not already filled
+                    if (input.type === 'radio' || input.type === 'checkbox') {
+                        input.checked = (input.value === autofillData[fieldId]);
+                    } else {
+                        input.value = autofillData[fieldId];
+                    }
+                    filledFields.add(fieldId); // Mark the field as filled
+                    // Simulate user input to trigger field change
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        });
     }
-  
-    // Send data to the backend.
-    try {
-      const response = await fetch('http://localhost:5055/api/get_autofill_data', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ form_fields: formFields })
-      });
-  
-      if (response.ok) {
-        const autofillData = await response.json();
-        // Fill in the form fields.
-        fillFormFields(autofillData);
-        console.log('Form autofill completed.');
-      } else {
-        console.error('Error fetching autofill data:', response.statusText);
-      }
-    } catch (error) {
-      console.error('Error:', error);
+
+    function observePdfViewer() {
+        const viewer = document.getElementById('viewer');
+        if (!viewer) {
+            console.error('PDF viewer element not found.');
+            return;
+        }
+        console.log('PDF viewer found. Adding MutationObserver...');
+
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach(node => {
+                    if (node.classList && node.classList.contains('page')) {
+                        console.log(`New page detected: ${node.dataset.pageNumber}`);
+                        detectFormFields(node); // Start scanning for form fields
+                    }
+                });
+            });
+        });
+
+        observer.observe(viewer, { childList: true, subtree: true });
+        console.log('MutationObserver attached to PDF viewer.');
     }
-  })();
-  
+
+    console.log('Observing PDF viewer for page rendering using MutationObserver...');
+    observePdfViewer();  // Start monitoring the viewer for page changes
+})();
