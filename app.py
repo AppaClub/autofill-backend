@@ -1,15 +1,8 @@
 # app.py
 
-# Import required libraries
-# from ibm_watson_machine_learning.foundation_models.extensions.langchain import WatsonxLLM
-# from ibm_watson_machine_learning.metanames import GenTextParamsMetaNames as GenParams
-# from ibm_watson_machine_learning.foundation_models import Model
-
 from langchain.embeddings import HuggingFaceInstructEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-# from langchain.chains import ConversationalRetrievalChain
 from langchain.prompts.prompt import PromptTemplate
-
 from langchain.document_loaders import PyPDFDirectoryLoader
 from langchain.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -22,6 +15,7 @@ import asyncio
 import os
 from dotenv import load_dotenv
 import math
+import time
 
 load_dotenv()
 
@@ -67,32 +61,8 @@ async def process_field(field, llm_chain, db):
         print(f"Error processing field '{field['label']}': {e}")
         return {**field, "response": ""}
 
-# Modified filling_form function
-async def filling_form(form_fields_info):
-    llm = get_llm()
-    db = process_data()
-    
-    prompt_template = PromptTemplate(
-        input_variables=["context", "question"],
-        template="""You are an assistant that provides concise answers based on the given context.
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:"""
-    )
-    
-    llm_chain = LLMChain(llm=llm, prompt=prompt_template)
-    
-    tasks = [process_field(field, llm_chain, db) for field in form_fields_info]
-    structured_responses = await asyncio.gather(*tasks)
-    
-    return structured_responses
 # Function to automate form filling using the processed data.
-async def filling_form(form_fields_info, batch_size = 10):
+async def filling_form(form_fields_info, batch_size = 4):
     llm = get_llm()
     db = process_data()
 
@@ -104,6 +74,7 @@ async def filling_form(form_fields_info, batch_size = 10):
     llm_chain = LLMChain(llm=llm, prompt=prompt_template)
     num_batches = math.ceil(len(form_fields_info) / batch_size)
     for i in range(num_batches):
+        time.sleep(10)
         batch_fields = form_fields_info[i * batch_size:(i + 1) * batch_size]
         labels = " ".join([field['label'] for field in batch_fields])
 
